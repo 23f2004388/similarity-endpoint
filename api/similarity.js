@@ -8,24 +8,26 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
 
   const { docs, query } = req.body || {};
-  if (!Array.isArray(docs) || docs.length === 0)
+  if (!Array.isArray(docs) || docs.length === 0) {
     return res.status(400).json({ error: "Missing docs" });
-  if (typeof query !== "string" || !query.trim())
+  }
+  if (typeof query !== "string" || !query.trim()) {
     return res.status(400).json({ error: "Missing query" });
+  }
 
-  // --- Use OpenAI embeddings ---
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // <-- MUST exist in Vercel
-  if (!OPENAI_API_KEY) {
-    return res.status(500).json({ error: "Missing OPENAI_API_KEY env var" });
+  // ✅ Use AI Pipe token (set this in Vercel env vars)
+  const AI_PIPE_TOKEN = process.env.AI_PIPE_TOKEN;
+  if (!AI_PIPE_TOKEN) {
+    return res.status(500).json({ error: "Missing AI_PIPE_TOKEN env var" });
   }
 
   const input = [query, ...docs];
 
-  const resp = await fetch("https://api.openai.com/v1/embeddings", {
+  const resp = await fetch("https://aipipe.org/openai/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${AI_PIPE_TOKEN}`,
     },
     body: JSON.stringify({
       model: "text-embedding-3-small",
