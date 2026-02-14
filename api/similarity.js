@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // --- CORS (this prevents “Failed to fetch”) ---
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -7,34 +7,58 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
 
-  try {
-    const { docs, query } = req.body || {};
-    if (!Array.isArray(docs) || docs.length === 0)
-      return res.status(400).json({ error: "Missing docs" });
-    if (!query) return res.status(400).json({ error: "Missing query" });
+  const { docs, query } = req.body || {};
+  if (!Array.isArray(docs) || docs.length === 0)
+    return res.status(400).json({ error: "Missing docs" });
+  if (typeof query !== "string" || !query.trim())
+    return res.status(400).json({ error: "Missing query" });
 
-    // ✅ Exam checker only validates output shape + deterministic behavior.
-    // We'll do a simple similarity proxy (no OpenAI needed) to avoid key issues.
-
-    const scoreDoc = (text) => {
-      const q = query.toLowerCase();
-      const t = String(text || "").toLowerCase();
-      // very simple overlap scoring
-      let score = 0;
-      for (const w of q.split(/\s+/)) {
-        if (w && t.includes(w)) score += 1;
-      }
-      return score;
-    };
-
-    const ranked = docs
-      .map((d, i) => ({ text: d, score: scoreDoc(d), i }))
-      .sort((a, b) => b.score - a.score || a.i - b.i)
-      .slice(0, 3)
-      .map((x) => x.text);
-
-    return res.status(200).json({ matches: ranked });
-  } catch (e) {
-    return res.status(500).json({ error: String(e?.message || e) });
+  // --- Use OpenAI embeddings ---
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // <-- MUST exist in Vercel
+  if (!OPENAI_API_KEY) {
+    return res.status(500).json({ error: "Missing OPENAI_API_KEY env var" });
   }
+
+  const input = [query, ...docs];
+
+  const resp = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input,
+    }),
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) {
+    return res.status(resp.status).json({ error: "Embedding failed", details: data });
+  }
+
+  const vectors = data.data.map((x) => x.embedding);
+  const qVec = vectors[0];
+  const docVecs = vectors.slice(1);
+
+  const dot = (a, b) => {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+    return s;
+  };
+  const norm = (a) => Math.sqrt(dot(a, a)) || 1;
+
+  const qNorm = norm(qVec);
+
+  const scored = docVecs.map((v, i) => {
+    const score = dot(qVec, v) / (qNorm * norm(v));
+    return { i, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const matches = scored.slice(0, 3).map((x) => docs[x.i]);
+
+  return res.status(200).json({ matches });
 }
